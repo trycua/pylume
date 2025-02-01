@@ -22,6 +22,14 @@ jobs:
         virtualenvs-create: true
         virtualenvs-in-project: true
     
+    - name: Set version from release tag
+      run: |
+        # Extract version from tag (remove 'v' prefix if present)
+        VERSION=${GITHUB_REF#refs/tags/}
+        VERSION=${VERSION#v}
+        # Update version in pyproject.toml
+        poetry version $VERSION
+        
     - name: Build and publish
       env:
         PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
