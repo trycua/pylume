@@ -16,7 +16,7 @@
 </div>
 
 
-**lume-py** is a Python library for managing macOS virtual machines based on [lume](https://github.com/trycua/lume).
+**pylume** is a lightweight Python library based on [lume](https://github.com/trycua/lume) to create, run and manage macOS and Linux virtual machines (VMs) natively on Apple Silicon.
 
 <div align="center">
 <img src="img/py.png" alt="lume-py">
