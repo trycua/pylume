@@ -29,6 +29,27 @@ jobs:
         VERSION=${VERSION#v}
         # Update version in pyproject.toml
         poetry version $VERSION
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Download and setup lume binary
+      run: |
+        # Create a temporary directory for extraction
+        mkdir -p temp_lume
+        
+        # Download the lume release
+        curl -L "https://github.com/trycua/lume/releases/download/v${VERSION}/lume.tar.gz" -o temp_lume/lume.tar.gz
+        
+        # Extract the tar file
+        cd temp_lume && tar xzf lume.tar.gz
+        
+        # Make the binary executable
+        chmod +x lume
+        
+        # Copy the lume binary to the correct location
+        cp lume "${GITHUB_WORKSPACE}/pylume/lume"
+        
+        # Cleanup
+        cd "${GITHUB_WORKSPACE}" && rm -rf temp_lume
         
     - name: Build and publish
       env:
