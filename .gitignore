@@ -180,3 +180,6 @@ cython_debug/
 .vscode/
 
 .DS_Store
+
+# lume binary - overidden by the github action
+./pylume/lume
