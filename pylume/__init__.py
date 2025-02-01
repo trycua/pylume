@@ -14,17 +14,20 @@ Example:
     >>> client.run_vm("my-vm")
 """
 
-# Use relative imports
-from .pylume import PyLume
+# Import all models first
 from .models import (
     VMConfig,
     VMStatus,
-    VMRunConfig,
-    VMUpdateConfig,
-    PullConfig,
-    CloneConfig,
+    VMRunOpts,
+    VMUpdateOpts,
+    ImageRef,
+    CloneSpec,
     SharedDirectory,
+    ImageList,
+    ImageInfo,
 )
+
+# Import exceptions
 from .exceptions import (
     LumeError,
     LumeServerError,
@@ -36,17 +39,22 @@ from .exceptions import (
     LumeImageError,
 )
 
+# Import main class last to avoid circular imports
+from .pylume import PyLume
+
 __version__ = "0.1.0"
 
 __all__ = [
     "PyLume",
     "VMConfig",
     "VMStatus",
-    "VMRunConfig",
-    "VMUpdateConfig",
-    "PullConfig",
-    "CloneConfig",
+    "VMRunOpts",
+    "VMUpdateOpts",
+    "ImageRef",
+    "CloneSpec",
     "SharedDirectory",
+    "ImageList",
+    "ImageInfo",
     "LumeError",
     "LumeServerError",
     "LumeConnectionError",

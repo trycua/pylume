@@ -8,27 +8,28 @@
     </picture>
   </div>
 
-  [![Python](https://img.shields.io/badge/Python-3.11-333333?logo=python&logoColor=white&labelColor=333333)](#)
+  [![Python](https://img.shields.io/badge/Python-333333?logo=python&logoColor=white&labelColor=333333)](#)
   [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=F0F0F0)](#)
-  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.com/channels/1328377437301641247)
+  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/8p56E2KJ)
+  [![PyPI](https://img.shields.io/pypi/v/pylume?color=333333)](https://pypi.org/project/pylume/)
 </h1>
 </div>
 
 
-**lume-py** is a Python library for managing macOS virtual machines based on [PyLume](https://github.com/trycua/lume).
+**lume-py** is a Python library for managing macOS virtual machines based on [lume](https://github.com/trycua/lume).
 
 <div align="center">
-<img src="img/cli.png" alt="lume-py">
+<img src="img/py.png" alt="lume-py">
 </div>
 
 
 ```bash
-pip install lume
+pip install pylume
 ```
 
 ## Usage
 
-Please refer to this [Notebook](nb.ipynb) for a quickstart. More details about the underlying API are available [here](https://github.com/trycua/lume/docs/API-Reference.md).
+Please refer to this [Notebook](./samples/nb.ipynb) for a quickstart. More details about the underlying API used by pylume are available [here](https://github.com/trycua/lume/docs/API-Reference.md).
 
 ## Prebuilt Images
 
@@ -37,9 +38,9 @@ These images come pre-configured with an SSH server and auto-login enabled.
 
 ## Contributing
 
-We welcome and greatly appreciate contributions to lume! Whether you're improving documentation, adding new features, fixing bugs, or adding new VM images, your efforts help make lume better for everyone. For detailed instructions on how to contribute, please refer to our [Contributing Guidelines](CONTRIBUTING.md).
+We welcome and greatly appreciate contributions to lume! Whether you're improving documentation, adding new features, fixing bugs, or adding new VM images, your efforts help make pylume better for everyone.
 
-Join our [Discord community](https://discord.com/channels/1328377437301641247) to discuss ideas or get assistance.
+Join our [Discord community](https://discord.gg/8p56E2KJ) to discuss ideas or get assistance.
 
 ## License
 
