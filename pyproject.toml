@@ -18,8 +18,15 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
+
+packages = [
+    { include = "pylume" }
+]
+
+# This should be at the root level of tool.poetry
 include = [
-    "pylume/lume"
+    { path = "pylume/lume", format = "sdist" },
+    { path = "pylume/lume", format = "wheel" }
 ]
 
 [tool.poetry.dependencies]

@@ -60,4 +60,13 @@ jobs:
       run: |
         poetry config pypi-token.pypi $PYPI_TOKEN
         poetry build
+        
+        # Verify the binary is in the wheel
+        python -m pip install wheel
+        wheel unpack dist/*.whl --dest temp_wheel
+        echo "Listing contents of wheel directory:"
+        find temp_wheel -type f
+        test -f temp_wheel/pylume-*/pylume/lume || { echo "lume binary not found in wheel"; exit 1; }
+        rm -rf temp_wheel
+        
         poetry publish
