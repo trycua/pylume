@@ -36,17 +36,20 @@ jobs:
         # Create a temporary directory for extraction
         mkdir -p temp_lume
         
-        # Download the lume release
-        curl -L "https://github.com/trycua/lume/releases/download/v${VERSION}/lume.tar.gz" -o temp_lume/lume.tar.gz
+        # Download the lume release (silently)
+        curl -sL "https://github.com/trycua/lume/releases/download/v${VERSION}/lume.tar.gz" -o temp_lume/lume.tar.gz
         
-        # Extract the tar file
-        cd temp_lume && tar xzf lume.tar.gz
+        # Extract the tar file (ignore ownership and suppress warnings)
+        cd temp_lume && tar --no-same-owner -xzf lume.tar.gz
         
         # Make the binary executable
         chmod +x lume
         
         # Copy the lume binary to the correct location
         cp lume "${GITHUB_WORKSPACE}/pylume/lume"
+        
+        # Verify the binary exists and is executable
+        test -x "${GITHUB_WORKSPACE}/pylume/lume" || { echo "lume binary not found or not executable"; exit 1; }
         
         # Cleanup
         cd "${GITHUB_WORKSPACE}" && rm -rf temp_lume

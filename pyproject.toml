@@ -18,6 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
+include = [
+    "pylume/lume"
+]
 
 [tool.poetry.dependencies]
 python = "^3.10"
