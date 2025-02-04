@@ -6,18 +6,28 @@ import tempfile
 import aiohttp
 import logging
 import socket
-from typing import Optional, Tuple
+from typing import Optional
 import sys
+from .exceptions import LumeConnectionError
+import signal
 
 class LumeServer:
-    def __init__(self, debug: bool = False, server_start_timeout: int = 60):
+    def __init__(
+        self, 
+        debug: bool = False, 
+        server_start_timeout: int = 60,
+        port: Optional[int] = None,
+        use_existing_server: bool = False
+    ):
+        """Initialize the LumeServer."""
         self.debug = debug
         self.server_start_timeout = server_start_timeout
-        self.server_process: Optional[subprocess.Popen] = None
-        self.output_file: Optional[tempfile.NamedTemporaryFile] = None
-        self._output_task: Optional[asyncio.Task] = None
-        self.port: Optional[int] = None
-        self.base_url: Optional[str] = None
+        self.server_process = None
+        self.output_file = None
+        self.requested_port = port
+        self.port = None
+        self.base_url = None
+        self.use_existing_server = use_existing_server
         
         # Configure logging
         self.logger = logging.getLogger('lume_server')
@@ -28,197 +38,145 @@ class LumeServer:
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
-    def _find_available_port(self, start_port: int = 3000) -> int:
-        """Find the first available port starting from start_port."""
-        port = start_port
-        while port < 65535:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(('localhost', port))
-                    return port
-            except OSError:
-                port += 1
-        raise RuntimeError("No available ports found")
+    def _check_port_available(self, port: int) -> bool:
+        """Check if a specific port is available."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('localhost', port))
+                return True
+        except OSError:
+            return False
 
-    def _log_debug(self, message: str, **kwargs) -> None:
-        """Log debug information if debug mode is enabled."""
-        if self.debug:
-            if kwargs:
-                import json
-                message = f"{message}\n{json.dumps(kwargs, indent=2)}"
-            self.logger.debug(message)
-
-    async def _read_output(self) -> None:
-        """Read and display server output."""
-        if not self.server_process:
-            return
-
-        while True:
-            if self.server_process.poll() is not None:
-                self.logger.debug("Server process ended")
-                break
-
-            # Read stdout
-            if self.server_process.stdout:
-                try:
-                    line = self.server_process.stdout.readline()
-                    if line:
-                        line = line.strip()
-                        if line:  # Only print non-empty lines
-                            print(f"SERVER OUT: {line}")
-                except Exception as e:
-                    print(f"Error reading stdout: {e}")
-
-            # Read stderr
-            if self.server_process.stderr:
-                try:
-                    line = self.server_process.stderr.readline()
-                    if line:
-                        line = line.strip()
-                        if line:  # Only print non-empty lines
-                            print(f"SERVER ERR: {line}")
-                except Exception as e:
-                    print(f"Error reading stderr: {e}")
-
-            await asyncio.sleep(0.1)
-
-    async def ensure_running(self) -> None:
-        """Ensure the lume server is running."""
-        if self.server_process is None or self.server_process.poll() is not None:
-            await self._start_server()
+    def _get_server_port(self) -> int:
+        """Get and validate the server port.
+        
+        Returns:
+            int: The validated port number
+            
+        Raises:
+            RuntimeError: If no port was specified
+            LumeConfigError: If the requested port is not available
+        """
+        if self.requested_port is None:
+            raise RuntimeError("No port specified for lume server")
+        
+        if not self._check_port_available(self.requested_port):
+            from .exceptions import LumeConfigError
+            raise LumeConfigError(f"Requested port {self.requested_port} is not available")
+        
+        return self.requested_port
 
     async def _start_server(self) -> None:
-        """Start the lume server."""
+        """Start the lume server using a managed shell script."""
         self.logger.debug("Starting PyLume server")
         lume_path = os.path.join(os.path.dirname(__file__), "lume")
         if not os.path.exists(lume_path):
             raise RuntimeError(f"Could not find lume binary at {lume_path}")
         
-        # Make sure the file is executable
-        os.chmod(lume_path, 0o755)
-        
-        # Find an available port
-        self.port = self._find_available_port()
-        self.base_url = f"http://localhost:{self.port}/lume"
-        
-        # Create log file in the same directory as the lume binary
-        log_file_path = os.path.abspath(os.path.join(os.path.dirname(lume_path), "lume_server.log"))
-        
-        if self.debug:
-            print("\n=== Server Configuration ===")
-            print(f"Log file path: {log_file_path}")
-            print(f"Current directory: {os.getcwd()}")
-            print(f"Lume binary path: {lume_path}")
-            print(f"Server port: {self.port}")
-            print("==========================\n")
-        
+        script_file = None
         try:
-            if self.debug:
-                # In debug mode, write to log file
-                self.logger.debug(f"Starting lume server with: {lume_path} serve --port {self.port}")
-                
-                # Open log file for both reading and writing
-                self.output_file = open(log_file_path, 'w+')
-                self.output_file.write(f"=== Starting Lume Server ===\n")
-                self.output_file.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                self.output_file.write(f"Port: {self.port}\n")
-                self.output_file.write("=========================\n\n")
-                self.output_file.flush()
-                
-                # Start server process with output going to our managed file
-                env = os.environ.copy()  # Copy current environment
-                env.update({
-                    "RUST_LOG": "debug",  # Enable Rust debug logging
-                    "RUST_BACKTRACE": "1"  # Enable backtraces for better error reporting
-                })
-                
-                self.server_process = subprocess.Popen(
-                    [lume_path, "serve", "--port", str(self.port)],
-                    stdout=self.output_file,
-                    stderr=subprocess.STDOUT,  # Redirect stderr to stdout
-                    cwd=os.path.dirname(lume_path),
-                    start_new_session=True,
-                    env=env
-                )
-                
-                # Start log reading task
-                async def tail_log():
-                    while True:
-                        try:
-                            # Seek to current position
-                            self.output_file.seek(0, os.SEEK_END)
-                            
-                            # Read any new content
-                            line = self.output_file.readline()
-                            if line:
-                                line = line.strip()
-                                if line:  # Only print non-empty lines
-                                    print(f"SERVER: {line}")
-                            
-                            # Check if process is still running
-                            if self.server_process.poll() is not None:
-                                print("Server process ended")
-                                break
-                                
-                            await asyncio.sleep(0.1)
-                        except Exception as e:
-                            print(f"Error reading log: {e}")
-                            await asyncio.sleep(0.1)
-                
-                self._output_task = asyncio.create_task(tail_log())
-                print(f"Started reading server logs from: {log_file_path}")
-            else:
-                # In non-debug mode, write to a temporary file
-                self.output_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
-                self.logger.debug(f"Using temporary file for server output: {self.output_file.name}")
-                self.server_process = subprocess.Popen(
-                    [lume_path, "serve", "--port", str(self.port)],
-                    stdout=self.output_file,
-                    stderr=self.output_file,
-                    cwd=os.path.dirname(lume_path),
-                    start_new_session=True
-                )
-                
+            os.chmod(lume_path, 0o755)
+            self.port = self._get_server_port()
+            self.base_url = f"http://localhost:{self.port}/lume"
+            
+            # Create shell script with trap for process management
+            script_content = f"""#!/bin/bash
+trap 'kill $(jobs -p)' EXIT
+exec {lume_path} serve --port {self.port}
+"""
+            script_dir = os.path.dirname(lume_path)
+            script_file = tempfile.NamedTemporaryFile(
+                mode='w',
+                suffix='.sh',
+                dir=script_dir,
+                delete=True
+            )
+            script_file.write(script_content)
+            script_file.flush()
+            os.chmod(script_file.name, 0o755)
+            
+            # Set up output handling - just use a temp file
+            self.output_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+            
+            # Start the managed server process
+            env = os.environ.copy()
+            env["RUST_BACKTRACE"] = "1"
+            
+            self.server_process = subprocess.Popen(
+                ['/bin/bash', script_file.name],
+                stdout=self.output_file,
+                stderr=subprocess.STDOUT,
+                cwd=script_dir,
+                env=env
+            )
+
+            # Wait for server to initialize
+            await asyncio.sleep(2)
+            await self._wait_for_server()
+
         except Exception as e:
             await self._cleanup()
             raise RuntimeError(f"Failed to start lume server process: {str(e)}")
-        
-        await self._wait_for_server()
+        finally:
+            # Ensure script file is cleaned up
+            if script_file:
+                try:
+                    script_file.close()
+                except:
+                    pass
+
+    async def _tail_log(self) -> None:
+        """Read and display server log output in debug mode."""
+        while True:
+            try:
+                self.output_file.seek(0, os.SEEK_END)
+                line = self.output_file.readline()
+                if line:
+                    line = line.strip()
+                    if line:
+                        print(f"SERVER: {line}")
+                if self.server_process.poll() is not None:
+                    print("Server process ended")
+                    break
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"Error reading log: {e}")
+                await asyncio.sleep(0.1)
 
     async def _wait_for_server(self) -> None:
-        """Wait for server to start and become responsive."""
+        """Wait for server to start and become responsive with increased timeout."""
         start_time = time.time()
-        server_ready = False
-        last_size = 0
-        
         while time.time() - start_time < self.server_start_timeout:
             if self.server_process.poll() is not None:
-                # Process has terminated
-                error_msg = self._get_error_message()
-                self._cleanup()
+                error_msg = await self._get_error_output()
+                await self._cleanup()
                 raise RuntimeError(error_msg)
             
-            server_ready = await self._check_server_output(last_size)
-            if server_ready:
-                break
-            
-            await asyncio.sleep(1.0)
+            try:
+                await self._verify_server()
+                self.logger.debug("Server is now responsive")
+                return
+            except Exception as e:
+                self.logger.debug(f"Server not ready yet: {str(e)}")
+                await asyncio.sleep(1.0)
         
-        if not server_ready:
-            self._cleanup()
-            raise RuntimeError(
-                f"Failed to start lume server after {self.server_start_timeout} seconds. "
-                "Check the debug output for more details."
-            )
-        
-        # Give the server a moment to fully initialize
-        await asyncio.sleep(2.0)
-        await self._verify_server()
+        await self._cleanup()
+        raise RuntimeError(f"Server failed to start after {self.server_start_timeout} seconds")
 
-    def _get_error_message(self) -> str:
-        """Get error message from output file."""
+    async def _verify_server(self) -> None:
+        """Verify server is responding to requests."""
+        try:
+            timeout = aiohttp.ClientTimeout(total=10.0)
+            async with aiohttp.ClientSession(timeout=timeout) as client:
+                await client.get(f"{self.base_url}/vms")
+                self.logger.debug("PyLume server started successfully")
+        except Exception as e:
+            raise RuntimeError(f"Server not responding: {str(e)}")
+
+    async def _get_error_output(self) -> str:
+        """Get error output from the server process."""
         if not self.output_file:
-            return "No output file available"
+            return "No output available"
         self.output_file.seek(0)
         output = self.output_file.read()
         return (
@@ -227,88 +185,35 @@ class LumeServer:
             f"Output: {output}"
         )
 
-    async def _check_server_output(self, last_size: int) -> bool:
-        """Check server output for startup message."""
-        if self.debug:
-            # In debug mode, just check server connection
-            try:
-                check_timeout = aiohttp.ClientTimeout(total=5.0)
-                async with aiohttp.ClientSession(timeout=check_timeout) as check_client:
-                    await check_client.get(f"{self.base_url}/vms")
-                    self.logger.debug("Server is responding to requests")
-                    return True
-            except (aiohttp.ClientConnectionError, asyncio.TimeoutError):
-                return False
-        else:
-            # In non-debug mode, check the output file
-            if not self.output_file:
-                return False
-                
-            self.output_file.seek(0, os.SEEK_END)
-            size = self.output_file.tell()
-            if size > last_size:
-                self.output_file.seek(last_size)
-                new_output = self.output_file.read()
-                if new_output.strip():
-                    self.logger.debug(f"Server output: {new_output.strip()}")
-                if "Server started" in new_output:
-                    self.logger.debug("Server startup detected")
-                    return True
-                
-            # Try to connect to the server
-            try:
-                check_timeout = aiohttp.ClientTimeout(total=5.0)
-                async with aiohttp.ClientSession(timeout=check_timeout) as check_client:
-                    await check_client.get(f"{self.base_url}/vms")
-                    self.logger.debug("Server is responding to requests")
-                    return True
-            except (aiohttp.ClientConnectionError, asyncio.TimeoutError):
-                return False
-
-    async def _verify_server(self) -> None:
-        """Verify server is responding to requests."""
-        try:
-            check_timeout = aiohttp.ClientTimeout(total=10.0)
-            async with aiohttp.ClientSession(timeout=check_timeout) as check_client:
-                await check_client.get(f"{self.base_url}/vms")
-                self.logger.debug("PyLume server started successfully")
-        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-            self.logger.error(f"Server verification failed: {str(e)}")
-            self._cleanup()
-            raise RuntimeError(f"Server started but is not responding: {str(e)}")
-
     async def _cleanup(self) -> None:
-        """Clean up server process and output file."""
-        if self._output_task and not self._output_task.done():
-            self._output_task.cancel()
-            try:
-                await self._output_task
-            except asyncio.CancelledError:
-                pass
-            self._output_task = None
-
+        """Clean up all server resources."""
         if self.server_process:
-            self.server_process.terminate()
             try:
-                self.server_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.server_process.kill()
-            self.server_process = None
-        
-        if self.output_file:
-            name = self.output_file.name
-            self.output_file.close()
-            # Only delete the output file if we're not in debug mode
-            if not self.debug:
+                self.server_process.terminate()
                 try:
-                    os.unlink(name)
-                except Exception as e:
-                    print(f"Error removing output file: {e}")
-            else:
-                print(f"\nServer log file preserved at: {name}")
+                    self.server_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.server_process.kill()
+            except:
+                pass
+            self.server_process = None
+
+        # Clean up output file
+        if self.output_file:
+            try:
+                self.output_file.close()
+                os.unlink(self.output_file.name)
+            except Exception as e:
+                self.logger.debug(f"Error cleaning up output file: {e}")
             self.output_file = None
 
+    async def ensure_running(self) -> None:
+        """Start the server if we're managing it."""
+        if not self.use_existing_server:
+            await self._start_server()
+
     async def stop(self) -> None:
-        """Stop the server."""
-        self.logger.debug("Stopping lume server...")
-        await self._cleanup() 
+        """Stop the server if we're managing it."""
+        if not self.use_existing_server:
+            self.logger.debug("Stopping lume server...")
+            await self._cleanup() 

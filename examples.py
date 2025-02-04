@@ -10,7 +10,7 @@ from pylume import (
 
 async def main():
     """Example usage of PyLume."""
-    async with PyLume(debug=True) as pylume:
+    async with PyLume(port=3000, use_existing_server=False) as pylume:
 
         # Create a new VM
         print("\n=== Creating a new VM ===")

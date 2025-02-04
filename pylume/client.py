@@ -17,7 +17,15 @@ class LumeClient:
         self.base_url = base_url
         self.timeout = timeout
         self.debug = debug
-        self.session: Optional[aiohttp.ClientSession] = None
+
+    def _create_connector(self) -> aiohttp.TCPConnector:
+        """Create a new connector for each session."""
+        return aiohttp.TCPConnector(
+            force_close=True,
+            enable_cleanup_closed=True,
+            keepalive_timeout=None,
+            limit=10
+        )
 
     def _log_debug(self, message: str, **kwargs) -> None:
         """Log debug information if debug mode is enabled."""
@@ -26,94 +34,72 @@ class LumeClient:
             if kwargs:
                 print(json.dumps(kwargs, indent=2))
 
-    async def _init_session(self) -> aiohttp.ClientSession:
-        """Initialize aiohttp session if not already initialized."""
-        if self.session is None:
-            self.session = aiohttp.ClientSession(timeout=self.timeout)
-        return self.session
-
-    async def _handle_api_error(self, e: Exception, operation: str) -> None:
-        """Handle API errors and raise appropriate custom exceptions."""
-        if isinstance(e, aiohttp.ClientConnectionError):
-            raise LumeConnectionError(f"Failed to connect to PyLume server: {str(e)}")
-        elif isinstance(e, asyncio.TimeoutError):
-            raise LumeTimeoutError(f"Request timed out: {str(e)}")
-            
-        if not hasattr(e, 'status') and not isinstance(e, aiohttp.ClientResponseError):
-            raise LumeServerError(f"Unknown error during {operation}: {str(e)}")
-            
-        status_code = getattr(e, 'status', 500)
-        response_text = str(e)
-        
-        self._log_debug(
-            f"{operation} request failed",
-            status_code=status_code,
-            response_text=response_text
-        )
-        
-        if status_code == 404:
-            raise LumeNotFoundError(f"Resource not found during {operation}")
-        elif status_code == 400:
-            raise LumeConfigError(f"Invalid configuration for {operation}: {response_text}")
-        elif status_code >= 500:
-            raise LumeServerError(
-                f"Server error during {operation}",
-                status_code=status_code,
-                response_text=response_text
-            )
-        else:
-            raise LumeServerError(
-                f"Error during {operation}",
-                status_code=status_code,
-                response_text=response_text
-            )
-
     async def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """Make a GET request."""
-        try:
-            session = await self._init_session()
-            async with session.get(f"{self.base_url}{path}", params=params) as response:
-                response.raise_for_status()
-                return await response.json()
-        except Exception as e:
-            raise await self._handle_api_error(e, f"GET {path}")
+        connector = self._create_connector()
+        async with aiohttp.ClientSession(
+            timeout=self.timeout,
+            connector=connector,
+            headers={'Connection': 'close'}
+        ) as session:
+            try:
+                async with session.get(f"{self.base_url}{path}", params=params) as response:
+                    response.raise_for_status()
+                    return await response.json()
+            finally:
+                await connector.close()
 
     async def post(self, path: str, data: Optional[Dict[str, Any]] = None, timeout: Optional[aiohttp.ClientTimeout] = None) -> Any:
         """Make a POST request."""
-        try:
-            session = await self._init_session()
-            async with session.post(
-                f"{self.base_url}{path}",
-                headers={"Content-Type": "application/json"},
-                json=data,
-                timeout=timeout or self.timeout
-            ) as response:
-                response.raise_for_status()
-                return await response.json() if response.content_length else None
-        except Exception as e:
-            raise await self._handle_api_error(e, f"POST {path}")
+        connector = self._create_connector()
+        async with aiohttp.ClientSession(
+            timeout=timeout or self.timeout,
+            connector=connector,
+            headers={
+                'Content-Type': 'application/json',
+                'Connection': 'close'
+            }
+        ) as session:
+            try:
+                async with session.post(
+                    f"{self.base_url}{path}",
+                    json=data
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json() if response.content_length else None
+            finally:
+                await connector.close()
 
     async def patch(self, path: str, data: Dict[str, Any]) -> None:
         """Make a PATCH request."""
-        try:
-            session = await self._init_session()
-            async with session.patch(
-                f"{self.base_url}{path}",
-                headers={"Content-Type": "application/json"},
-                json=data
-            ) as response:
-                response.raise_for_status()
-        except Exception as e:
-            raise await self._handle_api_error(e, f"PATCH {path}")
+        connector = self._create_connector()
+        async with aiohttp.ClientSession(
+            timeout=self.timeout,
+            connector=connector,
+            headers={
+                'Content-Type': 'application/json',
+                'Connection': 'close'
+            }
+        ) as session:
+            try:
+                async with session.patch(f"{self.base_url}{path}", json=data) as response:
+                    response.raise_for_status()
+            finally:
+                await connector.close()
 
     async def delete(self, path: str) -> None:
         """Make a DELETE request."""
-        try:
-            session = await self._init_session()
-            async with session.delete(f"{self.base_url}{path}") as response:
-                response.raise_for_status()
-        except Exception as e:
-            raise await self._handle_api_error(e, f"DELETE {path}")
+        connector = self._create_connector()
+        async with aiohttp.ClientSession(
+            timeout=self.timeout,
+            connector=connector,
+            headers={'Connection': 'close'}
+        ) as session:
+            try:
+                async with session.delete(f"{self.base_url}{path}") as response:
+                    response.raise_for_status()
+            finally:
+                await connector.close()
 
     def print_curl(self, method: str, path: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Print equivalent curl command for debugging."""
@@ -128,7 +114,5 @@ class LumeClient:
         print()
 
     async def close(self) -> None:
-        """Close the client session."""
-        if self.session:
-            await self.session.close()
-            self.session = None 
+        """Close the client resources."""
+        pass  # No shared resources to clean up

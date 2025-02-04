@@ -8,6 +8,7 @@ import subprocess
 from typing import Optional, List, Union, Callable, TypeVar, Any
 from functools import wraps
 import re
+import signal
 
 from .server import LumeServer
 from .client import LumeClient
@@ -48,7 +49,9 @@ class PyLume:
         self,
         debug: bool = False,
         auto_start_server: bool = True,
-        server_start_timeout: int = 60
+        server_start_timeout: int = 60,
+        port: Optional[int] = None,
+        use_existing_server: bool = False
     ):
         """Initialize the async PyLume client.
         
@@ -56,16 +59,31 @@ class PyLume:
             debug: Enable debug logging
             auto_start_server: Whether to automatically start the lume server if not running
             server_start_timeout: Timeout in seconds to wait for server to start
+            port: Port number for the lume server. Required when use_existing_server is True.
+            use_existing_server: If True, will try to connect to an existing server on the specified port
+                               instead of starting a new one.
         """
-        self.server = LumeServer(debug=debug, server_start_timeout=server_start_timeout)
-        self.client = None  # Will be initialized after server starts
-        self.auto_start_server = auto_start_server
+        if use_existing_server and port is None:
+            raise LumeConfigError("Port must be specified when using an existing server")
+        
+        self.server = LumeServer(
+            debug=debug, 
+            server_start_timeout=server_start_timeout,
+            port=port,
+            use_existing_server=use_existing_server
+        )
+        self.client = None
 
     async def __aenter__(self) -> 'PyLume':
         """Async context manager entry."""
-        if self.auto_start_server:
+        if self.server.use_existing_server:
+            # Just set up the base URL and initialize client for existing server
+            self.server.port = self.server.requested_port
+            self.server.base_url = f"http://localhost:{self.server.port}/lume"
+        else:
             await self.server.ensure_running()
-            await self._init_client()
+        
+        await self._init_client()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -78,18 +96,18 @@ class PyLume:
         """Initialize the client if not already initialized."""
         if self.client is None:
             client_timeout = aiohttp.ClientTimeout(
-                total=float(300),  # 5 minutes total timeout
+                total=float(300),
                 connect=30.0,
                 sock_read=float(300),
                 sock_connect=30.0
             )
-            self.client = LumeClient(base_url=self.server.base_url, timeout=client_timeout, debug=self.server.debug)
-
-    @ensure_server
-    async def _ensure_client(self) -> None:
-        """Ensure client is initialized."""
-        if self.client is None:
-            await self._init_client()
+            if self.server.base_url is None:
+                raise RuntimeError("Server base URL not set")
+            self.client = LumeClient(
+                base_url=self.server.base_url,
+                timeout=client_timeout,
+                debug=self.server.debug
+            )
 
     def _log_debug(self, message: str, **kwargs) -> None:
         """Log debug information if debug mode is enabled."""
@@ -305,7 +323,6 @@ class PyLume:
             self.output_file = output_file
             self._log_debug("Server startup completed successfully")
 
-    @ensure_server
     async def create_vm(self, spec: Union[VMConfig, dict]) -> None:
         """Create a new VM."""
         if isinstance(spec, VMConfig):
@@ -314,7 +331,6 @@ class PyLume:
         self.client.print_curl("POST", "/vms", spec)
         await self.client.post("/vms", spec)
 
-    @ensure_server
     async def run_vm(self, name: str, opts: Optional[Union[VMRunOpts, dict]] = None) -> None:
         """Run a VM."""
         if opts is None:
@@ -326,19 +342,16 @@ class PyLume:
         self.client.print_curl("POST", f"/vms/{name}/run", payload)
         await self.client.post(f"/vms/{name}/run", payload)
 
-    @ensure_server
     async def list_vms(self) -> List[VMStatus]:
         """List all VMs."""
         data = await self.client.get("/vms")
         return [VMStatus.model_validate(vm) for vm in data]
 
-    @ensure_server
     async def get_vm(self, name: str) -> VMStatus:
         """Get VM details."""
         data = await self.client.get(f"/vms/{name}")
         return VMStatus.model_validate(data)
 
-    @ensure_server
     async def update_vm(self, name: str, params: Union[VMUpdateOpts, dict]) -> None:
         """Update VM settings."""
         if isinstance(params, dict):
@@ -348,17 +361,14 @@ class PyLume:
         self.client.print_curl("PATCH", f"/vms/{name}", payload)
         await self.client.patch(f"/vms/{name}", payload)
 
-    @ensure_server
     async def stop_vm(self, name: str) -> None:
         """Stop a VM."""
         await self.client.post(f"/vms/{name}/stop")
 
-    @ensure_server
     async def delete_vm(self, name: str) -> None:
         """Delete a VM."""
         await self.client.delete(f"/vms/{name}")
 
-    @ensure_server
     async def pull_image(self, spec: Union[ImageRef, dict, str], name: Optional[str] = None) -> None:
         """Pull a VM image."""
         await self._ensure_client()
@@ -398,21 +408,18 @@ class PyLume:
         self.client.print_curl("POST", "/pull", payload)
         await self.client.post("/pull", payload, timeout=pull_timeout)
 
-    @ensure_server
     async def clone_vm(self, name: str, new_name: str) -> None:
         """Clone a VM with the given name to a new VM with new_name."""
         config = CloneSpec(name=name, newName=new_name)
         self.client.print_curl("POST", "/vms/clone", config.model_dump())
         await self.client.post("/vms/clone", config.model_dump())
 
-    @ensure_server
     async def get_latest_ipsw_url(self) -> str:
         """Get the latest IPSW URL."""
         await self._ensure_client()
         data = await self.client.get("/ipsw")
         return data["url"]
 
-    @ensure_server
     async def get_images(self, organization: Optional[str] = None) -> ImageList:
         """Get list of available images."""
         await self._ensure_client()
@@ -422,11 +429,12 @@ class PyLume:
 
     async def close(self) -> None:
         """Close the client and stop the server."""
-        await self.client.close()
-        await asyncio.sleep(2)  # Give the server 2 seconds to finish any pending operations
+        if self.client is not None:
+            await self.client.close()
+            self.client = None
+        await asyncio.sleep(1)  # Reduced from 2 to 1 second
         await self.server.stop()
 
-    @ensure_server
     async def _ensure_client(self) -> None:
         """Ensure client is initialized."""
         if self.client is None:
