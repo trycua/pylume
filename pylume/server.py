@@ -3,7 +3,6 @@ import time
 import asyncio
 import subprocess
 import tempfile
-import aiohttp
 import logging
 import socket
 from typing import Optional
@@ -65,6 +64,168 @@ class LumeServer:
             raise LumeConfigError(f"Requested port {self.requested_port} is not available")
         
         return self.requested_port
+
+    async def _ensure_server_running(self) -> None:
+        """Ensure the lume server is running, start it if it's not."""
+        try:
+            self.logger.debug("Checking if lume server is running...")
+            # Try to connect to the server with a short timeout
+            cmd = ["curl", "-s", "-w", "%{http_code}", "-m", "5", f"{self.base_url}/vms"]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                response = stdout.decode()
+                status_code = int(response[-3:])
+                if status_code == 200:
+                    self.logger.debug("PyLume server is running")
+                    return
+                
+            self.logger.debug("PyLume server not running, attempting to start it")
+            # Server not running, try to start it
+            lume_path = os.path.join(os.path.dirname(__file__), "lume")
+            if not os.path.exists(lume_path):
+                raise RuntimeError(f"Could not find lume binary at {lume_path}")
+            
+            # Make sure the file is executable
+            os.chmod(lume_path, 0o755)
+            
+            # Create a temporary file for server output
+            self.output_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+            self.logger.debug(f"Using temporary file for server output: {self.output_file.name}")
+            
+            # Start the server
+            self.logger.debug(f"Starting lume server with: {lume_path} serve --port {self.port}")
+            
+            # Start server in background using subprocess.Popen
+            try:
+                self.server_process = subprocess.Popen(
+                    [lume_path, "serve", "--port", str(self.port)],
+                    stdout=self.output_file,
+                    stderr=self.output_file,
+                    cwd=os.path.dirname(lume_path),
+                    start_new_session=True  # Run in new session to avoid blocking
+                )
+            except Exception as e:
+                self.output_file.close()
+                os.unlink(self.output_file.name)
+                raise RuntimeError(f"Failed to start lume server process: {str(e)}")
+            
+            # Wait for server to start
+            self.logger.debug(f"Waiting up to {self.server_start_timeout} seconds for server to start...")
+            start_time = time.time()
+            server_ready = False
+            last_size = 0
+            
+            while time.time() - start_time < self.server_start_timeout:
+                if self.server_process.poll() is not None:
+                    # Process has terminated
+                    self.output_file.seek(0)
+                    output = self.output_file.read()
+                    self.output_file.close()
+                    os.unlink(self.output_file.name)
+                    error_msg = (
+                        f"Server process terminated unexpectedly.\n"
+                        f"Exit code: {self.server_process.returncode}\n"
+                        f"Output: {output}"
+                    )
+                    raise RuntimeError(error_msg)
+                
+                # Check output file for server ready message
+                self.output_file.seek(0, os.SEEK_END)
+                size = self.output_file.tell()
+                if size > last_size:  # Only read if there's new content
+                    self.output_file.seek(last_size)
+                    new_output = self.output_file.read()
+                    if new_output.strip():  # Only log non-empty output
+                        self.logger.debug(f"Server output: {new_output.strip()}")
+                    last_size = size
+                    
+                    if "Server started" in new_output:
+                        server_ready = True
+                        self.logger.debug("Server startup detected")
+                        break
+                
+                # Try to connect to the server periodically
+                try:
+                    cmd = ["curl", "-s", "-w", "%{http_code}", "-m", "5", f"{self.base_url}/vms"]
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
+                    stdout, stderr = await process.communicate()
+                    
+                    if process.returncode == 0:
+                        response = stdout.decode()
+                        status_code = int(response[-3:])
+                        if status_code == 200:
+                            server_ready = True
+                            self.logger.debug("Server is responding to requests")
+                            break
+                except:
+                    pass  # Server not ready yet
+                
+                await asyncio.sleep(1.0)
+            
+            if not server_ready:
+                # Cleanup if server didn't start
+                if self.server_process:
+                    self.server_process.terminate()
+                    try:
+                        self.server_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.server_process.kill()
+                self.output_file.close()
+                os.unlink(self.output_file.name)
+                raise RuntimeError(
+                    f"Failed to start lume server after {self.server_start_timeout} seconds. "
+                    "Check the debug output for more details."
+                )
+            
+            # Give the server a moment to fully initialize
+            await asyncio.sleep(2.0)
+            
+            # Verify server is responding
+            try:
+                cmd = ["curl", "-s", "-w", "%{http_code}", "-m", "10", f"{self.base_url}/vms"]
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    raise RuntimeError(f"Curl command failed: {stderr.decode()}")
+                
+                response = stdout.decode()
+                status_code = int(response[-3:])
+                
+                if status_code != 200:
+                    raise RuntimeError(f"Server returned status code {status_code}")
+                    
+                self.logger.debug("PyLume server started successfully")
+            except Exception as e:
+                self.logger.debug(f"Server verification failed: {str(e)}")
+                if self.server_process:
+                    self.server_process.terminate()
+                    try:
+                        self.server_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.server_process.kill()
+                self.output_file.close()
+                os.unlink(self.output_file.name)
+                raise RuntimeError(f"Server started but is not responding: {str(e)}")
+            
+            self.logger.debug("Server startup completed successfully")
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to start lume server: {str(e)}")
 
     async def _start_server(self) -> None:
         """Start the lume server using a managed shell script."""
@@ -166,10 +327,24 @@ exec {lume_path} serve --port {self.port}
     async def _verify_server(self) -> None:
         """Verify server is responding to requests."""
         try:
-            timeout = aiohttp.ClientTimeout(total=10.0)
-            async with aiohttp.ClientSession(timeout=timeout) as client:
-                await client.get(f"{self.base_url}/vms")
-                self.logger.debug("PyLume server started successfully")
+            cmd = ["curl", "-s", "-w", "%{http_code}", "-m", "10", f"{self.base_url}/vms"]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                raise RuntimeError(f"Curl command failed: {stderr.decode()}")
+            
+            response = stdout.decode()
+            status_code = int(response[-3:])
+            
+            if status_code != 200:
+                raise RuntimeError(f"Server returned status code {status_code}")
+                
+            self.logger.debug("PyLume server started successfully")
         except Exception as e:
             raise RuntimeError(f"Server not responding: {str(e)}")
 
