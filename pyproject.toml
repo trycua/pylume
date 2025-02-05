@@ -30,7 +30,6 @@ include = [
 
 [tool.poetry.dependencies]
 python = "^3.9"
-aiohttp = "^3.8.0"
 pydantic = "^2.0.0"
 
 [tool.poetry.group.dev.dependencies]
