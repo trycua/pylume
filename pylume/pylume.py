@@ -47,7 +47,6 @@ class PyLume:
     def __init__(
         self,
         debug: bool = False,
-        auto_start_server: bool = True,
         server_start_timeout: int = 60,
         port: Optional[int] = None,
         use_existing_server: bool = False

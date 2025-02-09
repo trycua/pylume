@@ -40,30 +40,59 @@ class LumeServer:
     def _check_port_available(self, port: int) -> bool:
         """Check if a specific port is available."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('localhost', port))
+            # Create a socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.logger.debug(f"Created socket for port {port} check")
+            
+            # Set socket options
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.logger.debug("Set SO_REUSEADDR")
+            
+            # Bind to the port
+            try:
+                s.bind(('127.0.0.1', port))
+                self.logger.debug(f"Successfully bound to port {port}")
+                s.listen(1)
+                self.logger.debug(f"Successfully listening on port {port}")
+                s.close()
+                self.logger.debug(f"Port {port} is available")
                 return True
-        except OSError:
+            except OSError as e:
+                self.logger.debug(f"Failed to bind to port {port}: {str(e)}")
+                return False
+            finally:
+                try:
+                    s.close()
+                    self.logger.debug("Socket closed")
+                except:
+                    pass
+                
+        except Exception as e:
+            self.logger.debug(f"Unexpected error checking port {port}: {str(e)}")
             return False
 
     def _get_server_port(self) -> int:
-        """Get and validate the server port.
+        """Get and validate the server port."""
+        from .exceptions import LumeConfigError
         
-        Returns:
-            int: The validated port number
-            
-        Raises:
-            RuntimeError: If no port was specified
-            LumeConfigError: If the requested port is not available
-        """
         if self.requested_port is None:
-            raise RuntimeError("No port specified for lume server")
+            raise LumeConfigError("Port must be specified when starting a new server")
         
-        if not self._check_port_available(self.requested_port):
-            from .exceptions import LumeConfigError
-            raise LumeConfigError(f"Requested port {self.requested_port} is not available")
+        self.logger.debug(f"Checking availability of port {self.requested_port}")
         
-        return self.requested_port
+        # Try multiple times with a small delay
+        for attempt in range(3):
+            if attempt > 0:
+                self.logger.debug(f"Retrying port check (attempt {attempt + 1})")
+                time.sleep(1)
+            
+            if self._check_port_available(self.requested_port):
+                self.logger.debug(f"Port {self.requested_port} is available")
+                return self.requested_port
+            else:
+                self.logger.debug(f"Port {self.requested_port} check failed on attempt {attempt + 1}")
+        
+        raise LumeConfigError(f"Requested port {self.requested_port} is not available after 3 attempts")
 
     async def _ensure_server_running(self) -> None:
         """Ensure the lume server is running, start it if it's not."""
@@ -228,46 +257,34 @@ class LumeServer:
             raise RuntimeError(f"Failed to start lume server: {str(e)}")
 
     async def _start_server(self) -> None:
-        """Start the lume server using a managed shell script."""
+        """Start the lume server using the lume executable."""
         self.logger.debug("Starting PyLume server")
+        
+        # Get absolute path to lume executable in the same directory as this file
         lume_path = os.path.join(os.path.dirname(__file__), "lume")
         if not os.path.exists(lume_path):
             raise RuntimeError(f"Could not find lume binary at {lume_path}")
-        
-        script_file = None
+
         try:
+            # Make executable
             os.chmod(lume_path, 0o755)
+            
+            # Get and validate port
             self.port = self._get_server_port()
             self.base_url = f"http://localhost:{self.port}/lume"
-            
-            # Create shell script with trap for process management
-            script_content = f"""#!/bin/bash
-trap 'kill $(jobs -p)' EXIT
-exec {lume_path} serve --port {self.port}
-"""
-            script_dir = os.path.dirname(lume_path)
-            script_file = tempfile.NamedTemporaryFile(
-                mode='w',
-                suffix='.sh',
-                dir=script_dir,
-                delete=True
-            )
-            script_file.write(script_content)
-            script_file.flush()
-            os.chmod(script_file.name, 0o755)
-            
-            # Set up output handling - just use a temp file
+
+            # Set up output handling
             self.output_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
             
-            # Start the managed server process
+            # Start the server process with the lume executable
             env = os.environ.copy()
-            env["RUST_BACKTRACE"] = "1"
+            env["RUST_BACKTRACE"] = "1"  # Enable backtrace for better error reporting
             
             self.server_process = subprocess.Popen(
-                ['/bin/bash', script_file.name],
+                [lume_path, "serve", "--port", str(self.port)],
                 stdout=self.output_file,
                 stderr=subprocess.STDOUT,
-                cwd=script_dir,
+                cwd=os.path.dirname(lume_path),  # Run from same directory as executable
                 env=env
             )
 
@@ -278,13 +295,6 @@ exec {lume_path} serve --port {self.port}
         except Exception as e:
             await self._cleanup()
             raise RuntimeError(f"Failed to start lume server process: {str(e)}")
-        finally:
-            # Ensure script file is cleaned up
-            if script_file:
-                try:
-                    script_file.close()
-                except:
-                    pass
 
     async def _tail_log(self) -> None:
         """Read and display server log output in debug mode."""
