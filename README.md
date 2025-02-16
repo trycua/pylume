@@ -10,7 +10,7 @@
 
   [![Python](https://img.shields.io/badge/Python-333333?logo=python&logoColor=white&labelColor=333333)](#)
   [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=F0F0F0)](#)
-  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/8p56E2KJ)
+  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.com/invite/mVnXXpdE85)
   [![PyPI](https://img.shields.io/pypi/v/pylume?color=333333)](https://pypi.org/project/pylume/)
 </h1>
 </div>
@@ -40,7 +40,7 @@ These images come pre-configured with an SSH server and auto-login enabled.
 
 We welcome and greatly appreciate contributions to lume! Whether you're improving documentation, adding new features, fixing bugs, or adding new VM images, your efforts help make pylume better for everyone.
 
-Join our [Discord community](https://discord.gg/8p56E2KJ) to discuss ideas or get assistance.
+Join our [Discord community](https://discord.com/invite/mVnXXpdE85) to discuss ideas or get assistance.
 
 ## License
 
