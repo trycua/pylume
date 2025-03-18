@@ -15,6 +15,7 @@
 </h1>
 </div>
 
+> **Archived** - PyLume is now part of the [cua monorepo](https://github.com/trycua/cua).
 
 **pylume** is a lightweight Python library based on [lume](https://github.com/trycua/lume) to create, run and manage macOS and Linux virtual machines (VMs) natively on Apple Silicon.
 
